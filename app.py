@@ -9,6 +9,7 @@ import logging
 import os
 import gzip
 from io import BytesIO
+from pathlib import Path
 import brotli
 
 logging.basicConfig(level=logging.DEBUG)
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 API_DATE_FORMAT = '%d/%m/%Y'
 IVAS_DATE_FORMAT = '%Y-%m-%d'
 SUPPORTED_INPUT_DATE_FORMATS = (API_DATE_FORMAT, IVAS_DATE_FORMAT)
+BASE_DIR = Path(__file__).resolve().parent
 
 
 def parse_supported_date(date_str):
@@ -38,6 +40,7 @@ class IVASSMSClient:
         self.base_url = "https://www.ivasms.com"
         self.logged_in = False
         self.csrf_token = None
+        self.auth_error = None
         
         self.scraper.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
@@ -52,6 +55,12 @@ class IVASSMSClient:
             'Sec-Fetch-User': '?1',
             'Cache-Control': 'max-age=0',
         })
+
+    def set_auth_failure(self, message):
+        self.logged_in = False
+        self.csrf_token = None
+        self.auth_error = message
+        logger.error(message)
 
     def decompress_response(self, response):
         """Decompress response content if encoded with gzip or brotli."""
@@ -75,9 +84,13 @@ class IVASSMSClient:
                 cookies_raw = json.loads(os.getenv("COOKIES_JSON"))
                 logger.debug("Loaded cookies from environment variable")
             else:
-                with open(file_path, 'r') as file:
+                cookie_path = Path(file_path)
+                if not cookie_path.is_absolute():
+                    cookie_path = BASE_DIR / cookie_path
+
+                with cookie_path.open('r', encoding='utf-8') as file:
                     cookies_raw = json.load(file)
-                    logger.debug("Loaded cookies from file")
+                    logger.debug(f"Loaded cookies from file: {cookie_path}")
             
             if isinstance(cookies_raw, dict):
                 logger.debug("Cookies loaded as dictionary")
@@ -90,25 +103,37 @@ class IVASSMSClient:
                 logger.debug("Cookies loaded as list")
                 return cookies
             else:
-                logger.error("Cookies are in an unsupported format")
+                self.set_auth_failure("Cookies are in an unsupported format.")
                 raise ValueError("Cookies are in an unsupported format.")
         except FileNotFoundError:
-            logger.error("cookies.json file not found")
+            cookie_path = Path(file_path)
+            if not cookie_path.is_absolute():
+                cookie_path = BASE_DIR / cookie_path
+            self.set_auth_failure(
+                f"Cookie file not found at {cookie_path}. Set COOKIES_JSON or add cookies.json next to app.py."
+            )
             return None
         except json.JSONDecodeError:
-            logger.error("Invalid JSON format in cookies.json")
+            self.set_auth_failure("Invalid JSON format in cookies.json or COOKIES_JSON")
             return None
         except Exception as e:
-            logger.error(f"Error loading cookies: {e}")
+            self.set_auth_failure(f"Error loading cookies: {e}")
             return None
 
     def login_with_cookies(self, cookies_file="cookies.json"):
         logger.debug("Attempting to login with cookies")
+        self.logged_in = False
+        self.csrf_token = None
+        self.auth_error = None
         cookies = self.load_cookies(cookies_file)
         if not cookies:
-            logger.error("No valid cookies loaded")
+            if not self.auth_error:
+                self.set_auth_failure(
+                    "No valid cookies loaded. Set COOKIES_JSON or add cookies.json next to app.py."
+                )
             return False
         
+        self.scraper.cookies.clear()
         for name, value in cookies.items():
             self.scraper.cookies.set(name, value, domain="www.ivasms.com")
         
@@ -122,18 +147,27 @@ class IVASSMSClient:
                 if csrf_input:
                     self.csrf_token = csrf_input.get('value')
                     self.logged_in = True
+                    self.auth_error = None
                     logger.debug(f"Logged in successfully with CSRF token: {self.csrf_token}")
                     return True
                 else:
-                    logger.error("Could not find CSRF token. Dumping response HTML for debugging:")
-                    logger.error(f"Response HTML (first 2000 chars): {html_content[:2000]}")
+                    self.set_auth_failure(
+                        "IVAS login did not return the expected CSRF token. Refresh the IVAS session cookies."
+                    )
+                    logger.error("Response HTML (first 2000 chars): %s", html_content[:2000])
                     logger.error(f"Full response length: {len(html_content)}")
                     return False
-            logger.error(f"Login failed with status code: {response.status_code}")
+            self.set_auth_failure(f"IVAS login failed with status code {response.status_code}")
             return False
         except Exception as e:
-            logger.error(f"Login error: {e}")
+            self.set_auth_failure(f"IVAS login error: {e}")
             return False
+
+    def ensure_authenticated(self, cookies_file="cookies.json"):
+        if self.logged_in and self.csrf_token:
+            return True
+
+        return self.login_with_cookies(cookies_file)
 
     def check_otps(self, from_date="", to_date=""):
         if not self.logged_in:
@@ -401,9 +435,11 @@ def get_sms():
     else:
         limit = None
 
-    if not client.logged_in:
+    if not client.ensure_authenticated():
         return jsonify({
-            'error': 'Client not authenticated'
+            'error': 'Client not authenticated',
+            'details': client.auth_error or 'Unable to authenticate with IVAS using the configured cookies.',
+            'hint': 'Refresh the IVAS cookies and set them via COOKIES_JSON or place cookies.json next to app.py.'
         }), 401
     
     logger.debug(f"Fetching SMS for date range: {from_date} to {to_date or 'empty'} with limit {limit}")

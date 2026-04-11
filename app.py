@@ -14,6 +14,24 @@ import brotli
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
+API_DATE_FORMAT = '%d/%m/%Y'
+IVAS_DATE_FORMAT = '%Y-%m-%d'
+SUPPORTED_INPUT_DATE_FORMATS = (API_DATE_FORMAT, IVAS_DATE_FORMAT)
+
+
+def parse_supported_date(date_str):
+    cleaned_date = (date_str or '').strip()
+    if not cleaned_date:
+        raise ValueError('Date parameter is required')
+
+    for date_format in SUPPORTED_INPUT_DATE_FORMATS:
+        try:
+            return datetime.strptime(cleaned_date, date_format)
+        except ValueError:
+            continue
+
+    raise ValueError('Invalid date format. Use DD/MM/YYYY or YYYY-MM-DD')
+
 class IVASSMSClient:
     def __init__(self):
         self.scraper = cloudscraper.create_scraper()
@@ -325,7 +343,9 @@ app = Flask(__name__)
 client = IVASSMSClient()
 
 with app.app_context():
-    if not client.login_with_cookies():
+    if os.getenv("SKIP_IVAS_LOGIN") == "1":
+        logger.debug("Skipping IVAS login because SKIP_IVAS_LOGIN=1")
+    elif not client.login_with_cookies():
         logger.error("Failed to initialize client with cookies")
 
 @app.route('/')
@@ -334,30 +354,38 @@ def welcome():
         'message': 'Welcome to the IVAS SMS API',
         'status': 'API is alive',
         'endpoints': {
-            '/sms': 'Get OTP messages for a specific date (format: DD/MM/YYYY) with optional limit. Example: /sms?date=01/05/2025&limit=10'
+            '/sms': 'Get OTP messages for a specific date (format: DD/MM/YYYY or YYYY-MM-DD) with optional limit. Example: /sms?date=01/05/2025&limit=10'
         }
     })
 
 @app.route('/sms')
 def get_sms():
-    date_str = request.args.get('date')
+    date_str = (request.args.get('date') or '').strip()
     limit = request.args.get('limit')
     
     if not date_str:
         return jsonify({
-            'error': 'Date parameter is required in DD/MM/YYYY format'
+            'error': 'Date parameter is required in DD/MM/YYYY or YYYY-MM-DD format'
         }), 400
     
     try:
-        parsed_date = datetime.strptime(date_str, '%d/%m/%Y') 
-        from_date = date_str
-        to_date = request.args.get('to_date', '')
-        if to_date:
-            datetime.strptime(to_date, '%d/%m/%Y')  
+        from_date_dt = parse_supported_date(date_str)
+        to_date_raw = (request.args.get('to_date') or '').strip()
+        # The IVAS panel submits both start and end dates, even for a single day.
+        to_date_dt = parse_supported_date(to_date_raw) if to_date_raw else from_date_dt
+        if to_date_dt < from_date_dt:
+            return jsonify({
+                'error': 'to_date must be the same day or after date'
+            }), 400
     except ValueError:
         return jsonify({
-            'error': 'Invalid date format. Use DD/MM/YYYY'
+            'error': 'Invalid date format. Use DD/MM/YYYY or YYYY-MM-DD'
         }), 400
+
+    from_date = from_date_dt.strftime(IVAS_DATE_FORMAT)
+    to_date = to_date_dt.strftime(IVAS_DATE_FORMAT)
+    response_from_date = from_date_dt.strftime(API_DATE_FORMAT)
+    response_to_date = to_date_dt.strftime(API_DATE_FORMAT) if to_date_raw else 'Not specified'
 
     if limit:
         try:
@@ -390,8 +418,8 @@ def get_sms():
     
     return jsonify({
         'status': 'success',
-        'from_date': from_date,
-        'to_date': to_date or 'Not specified',
+        'from_date': response_from_date,
+        'to_date': response_to_date,
         'limit': limit if limit is not None else 'Not specified',
         'sms_stats': {
             'count_sms': result['count_sms'],

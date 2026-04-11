@@ -1,1 +1,32 @@
-_fbp=fb.1.1775932688973.494747234693599871; XSRF-TOKEN=eyJpdiI6IlRIRHprYWlHd0JzL2kvdzRjSTlFN3c9PSIsInZhbHVlIjoiMkhnNVcyVXEzUGY1ZW5kS2I3NDVJTkMxZ0hFRUZJUmx6NzFRdU5MKzdGQXUwKzMraXZhaWVuSFdEeHVDaWdSTlVtUng4Y2JEYndSUkkvM1lTbExmVXdHT0FkUk5QeFZVSWVmVjlhdXphaXlsKzdKZUFxZ3BMblVQd0NzZHVHWmEiLCJtYWMiOiI5N2Q1N2E0YmQ2NDI1ZDhjZTUxMGZkOGMzYWI3NWUzYjgxYTkxMTRhODMzOGRhOGNiOTcyY2ViOWFlYjNlNTQ2IiwidGFnIjoiIn0%3D; ivas_sms_session=eyJpdiI6IlFtQ2psbVJ0aTh6SEZ1S3hDakh5ZVE9PSIsInZhbHVlIjoib0pjQnhxVHJ5K3hFRU4vUCtXaldGOW8yNVhIQWpSNGNhWUlGbG95OTduTGxOaHZUOVBoQlJqeG1wZFhaMUQvQjBMRFc3Z2M3VU02MmZ1N0sxYk1BWWxJU21vVmxTNUxhTEJqK0t4TzNtRzM2c0dXZ1doSVJEc1M3Vi9PaXoraVMiLCJtYWMiOiIyZTQxODU4Y2Y3MzI0M2VhMmQyNzQwYzNjMTRhYzhkOGIzYzE2YjllOGQyYzhjOGUzMmQ0YjI5MjNjY2U3ZjY1IiwidGFnIjoiIn0%3D
+[
+  {
+    "name": "ivas_sms_session",
+    "value": "eyJpdiI6InR6cFBKNXZPOEo1bjlnQ3ArTTJ1akE9PSIsInZhbHVlIjoiK3BXRllwV2N0MkU2Z3RLdHhYdVJpUTNCR2Y2THJ6UnI1NE9Od0pMZktGRTh5aVpOWHBMWk9BYnU5NlczMWRoUHlqSFNYc3VWTmlURWkzd01EejFnajcwUGRiNnBPU0dERExJRzVwWVBSL2hJKzVYMjdTSmVuZ2VaL0c5NE11dEciLCJtYWMiOiI2ZjE5NjRkOTkxNjk1MWQzMDYxMDEwZWVkOTMwMjY3MzQ2NjQzZTg0ZDZmM2VkYjhhMDFiMDRlNDg5MmYwMzBhIiwidGFnIjoiIn0%3D",
+    "domain": "www.ivasms.com"
+  },
+  {
+    "name": "cf_clearance",
+    "value": "LfL8fzOj4h6jsaZBLkyYffd7FnFh9p4ZSPgLR6aJq8s-1764863882-1.2.1.1-xoi_5OrvDruciLry53zHg_Z8mC0Qwkf08tS9x4QWHCyZW.Z6_SQffyRjcd3MO79JkGeoBjNTrZTtJhkRqVxMkE0E2w6c9jHREVHckovFjHwnXkjpJrnoY..XxKtomHl83BDZmb2m8ESw9rurB4Oibcgvk6ZcRaQjqKk94Ib5IKZ_lOaw0cpFxt7fnHtln9meCpN6PyKASlRTBp392B7Ct.U2wL18i_WizlCujwxlVqM",
+    "domain": ".ivasms.com"
+  },
+  {
+    "name": "_gid",
+    "value": "GA1.2.737951065.1764863908",
+    "domain": ".ivasms.com"
+  },
+  {
+    "name": "_ga",
+    "value": "GA1.2.1458570497.1760369509",
+    "domain": ".ivasms.com"
+  },
+  {
+    "name": "_fbp",
+    "value": "fb.1.1775932688973.494747234693599871",
+    "domain": ".ivasms.com"
+  },
+  {
+    "name": "XSRF-TOKEN",
+    "value": "eyJpdiI6ImZGalhVWktTQmVKRzd3enpUYVA4OXc9PSIsInZhbHVlIjoic3VvbXRKa0dTV3R5Uk1aMlZ6S2duWlRwbFJVMGhiSTRLek1WZ1VrQzBXdEJjUHBMdWJJcHk0MUxwVzErOVQxMnBYV3Z6eTdQbDRsWnlaQ3Z2TERrN0FESXJHeGxmMVg0MStwT01LUENEV21pL2FIdmlZUnhaVzMwbk82UnVmL1IiLCJtYWMiOiJiOThhOTJiYzM3NjczYmQwYWYwMzNkMTdjOGRmYzkwZmQ0MGQ3N2FkY2IzMDZiNDk1NmM0MWJhYWU4M2EzZjc3IiwidGFnIjoiIn0%3D",
+    "domain": "www.ivasms.com"
+  }
+]

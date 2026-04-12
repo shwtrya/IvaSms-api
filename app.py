@@ -10,6 +10,7 @@ import os
 import gzip
 from io import BytesIO
 from pathlib import Path
+import re
 import brotli
 
 logging.basicConfig(level=logging.DEBUG)
@@ -19,6 +20,10 @@ API_DATE_FORMAT = '%d/%m/%Y'
 IVAS_DATE_FORMAT = '%Y-%m-%d'
 SUPPORTED_INPUT_DATE_FORMATS = (API_DATE_FORMAT, IVAS_DATE_FORMAT)
 BASE_DIR = Path(__file__).resolve().parent
+try:
+    IVAS_REQUEST_TIMEOUT = int(os.getenv("IVAS_REQUEST_TIMEOUT", "30"))
+except ValueError:
+    IVAS_REQUEST_TIMEOUT = 30
 
 
 def parse_supported_date(date_str):
@@ -67,16 +72,177 @@ class IVASSMSClient:
         encoding = response.headers.get('Content-Encoding', '').lower()
         content = response.content
         try:
-            if encoding == 'gzip':
+            if encoding == 'gzip' and content[:2] == b'\x1f\x8b':
                 logger.debug("Decompressing gzip response")
                 content = gzip.decompress(content)
             elif encoding == 'br':
+                if content.startswith(b'<') or content.startswith(b'\n<'):
+                    return response.text
                 logger.debug("Decompressing brotli response")
                 content = brotli.decompress(content)
             return content.decode('utf-8', errors='replace')
         except Exception as e:
-            logger.error(f"Error decompressing response: {e}")
+            logger.debug(f"Falling back to response.text after decompression check: {e}")
             return response.text
+
+    def _extract_script_html_value(self, html_content, element_id):
+        pattern = re.compile(
+            rf'\$\("#{re.escape(element_id)}"\)\.html\(["\']([^"\']*)["\']\);'
+        )
+        match = pattern.search(html_content)
+        return match.group(1).strip() if match else None
+
+    def _clean_text(self, node, separator=' ', default=''):
+        if not node:
+            return default
+        return node.get_text(separator, strip=True)
+
+    def _clean_currency(self, value, default='0'):
+        cleaned = (value or '').replace('USD', '').replace('$', '').strip()
+        return cleaned or default
+
+    def _extract_onclick_args(self, onclick_value):
+        if not onclick_value:
+            return []
+        return re.findall(r"'([^']*)'", onclick_value)
+
+    def _parse_summary_html(self, html_content):
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        count_sms = self._clean_text(soup.select_one("#CountSMS")) or self._extract_script_html_value(
+            html_content, 'CountSMS'
+        ) or '0'
+        paid_sms = self._clean_text(soup.select_one("#PaidSMS")) or self._extract_script_html_value(
+            html_content, 'PaidSMS'
+        ) or '0'
+        unpaid_sms = self._clean_text(soup.select_one("#UnpaidSMS")) or self._extract_script_html_value(
+            html_content, 'UnpaidSMS'
+        ) or '0'
+        revenue_sms = self._clean_currency(
+            self._clean_text(soup.select_one("#RevenueSMS")) or self._extract_script_html_value(
+                html_content, 'RevenueSMS'
+            )
+        )
+
+        sms_details = []
+
+        legacy_items = soup.select("div.item")
+        for item in legacy_items:
+            country_number = self._clean_text(item.select_one(".col-sm-4"))
+            count = self._clean_text(item.select_one(".col-3:nth-child(2) p"), default='0')
+            paid = self._clean_text(item.select_one(".col-3:nth-child(3) p"), default='0')
+            unpaid = self._clean_text(item.select_one(".col-3:nth-child(4) p"), default='0')
+            revenue = self._clean_currency(
+                self._clean_text(item.select_one(".col-3:nth-child(5) p span.currency_cdr"))
+            )
+
+            sms_details.append({
+                'country_number': country_number,
+                'count': count,
+                'paid': paid,
+                'unpaid': unpaid,
+                'revenue': revenue
+            })
+
+        if not sms_details:
+            modern_items = soup.select("div.rng")
+            for item in modern_items:
+                country_number = self._clean_text(item.select_one(".rname"))
+                count = self._clean_text(item.select_one(".v-count"), default='0')
+                paid = self._clean_text(item.select_one(".v-paid"), default='0')
+                unpaid = self._clean_text(item.select_one(".v-unpaid"), default='0')
+                revenue = self._clean_currency(self._clean_text(item.select_one(".v-rev")))
+
+                sms_details.append({
+                    'country_number': country_number,
+                    'count': count,
+                    'paid': paid,
+                    'unpaid': unpaid,
+                    'revenue': revenue
+                })
+
+        return {
+            'count_sms': count_sms,
+            'paid_sms': paid_sms,
+            'unpaid_sms': unpaid_sms,
+            'revenue': revenue_sms,
+            'sms_details': sms_details
+        }
+
+    def _parse_number_details_html(self, html_content):
+        soup = BeautifulSoup(html_content, 'html.parser')
+        number_details = []
+
+        legacy_items = soup.select("div.card.card-body")
+        for item in legacy_items:
+            phone_number = self._clean_text(item.select_one(".col-sm-4"))
+            count = self._clean_text(item.select_one(".col-3:nth-child(2) p"), default='0')
+            paid = self._clean_text(item.select_one(".col-3:nth-child(3) p"), default='0')
+            unpaid = self._clean_text(item.select_one(".col-3:nth-child(4) p"), default='0')
+            revenue = self._clean_currency(
+                self._clean_text(item.select_one(".col-3:nth-child(5) p span.currency_cdr"))
+            )
+            onclick_args = self._extract_onclick_args(item.select_one(".col-sm-4").get('onclick', '') if item.select_one(".col-sm-4") else '')
+            id_number = onclick_args[3] if len(onclick_args) > 3 else ''
+
+            number_details.append({
+                'phone_number': phone_number,
+                'count': count,
+                'paid': paid,
+                'unpaid': unpaid,
+                'revenue': revenue,
+                'id_number': id_number
+            })
+
+        if not number_details:
+            modern_items = soup.select("div.nrow")
+            for item in modern_items:
+                onclick_args = self._extract_onclick_args(item.get('onclick', ''))
+                phone_number = self._clean_text(item.select_one(".nnum"))
+                if onclick_args:
+                    phone_number = onclick_args[0]
+                count = self._clean_text(item.select_one(".v-count"), default='0')
+                paid = self._clean_text(item.select_one(".v-paid"), default='0')
+                unpaid = self._clean_text(item.select_one(".v-unpaid"), default='0')
+                revenue = self._clean_currency(self._clean_text(item.select_one(".v-rev")))
+                id_number = onclick_args[1] if len(onclick_args) > 1 else ''
+
+                number_details.append({
+                    'phone_number': phone_number,
+                    'count': count,
+                    'paid': paid,
+                    'unpaid': unpaid,
+                    'revenue': revenue,
+                    'id_number': id_number
+                })
+
+        return number_details
+
+    def _parse_otp_message_html(self, html_content):
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        legacy_message = soup.select_one(".col-9.col-sm-6 p")
+        if legacy_message:
+            return self._clean_text(legacy_message, separator='\n')
+
+        message_nodes = soup.select("div.msg-text")
+        messages = [self._clean_text(node, separator='\n') for node in message_nodes if self._clean_text(node, separator='\n')]
+        if messages:
+            return "\n\n".join(messages)
+
+        return None
+
+    def _is_login_page(self, response, html_content):
+        final_url = (getattr(response, 'url', '') or '').lower()
+        if '/login' in final_url:
+            return True
+
+        soup = BeautifulSoup(html_content, 'html.parser')
+        return bool(
+            soup.select_one("form[action*='/login']")
+            or soup.select_one("input[name='email']")
+            or soup.select_one("input[name='password']")
+        )
 
     def load_cookies(self, file_path="cookies.json"):
         try:
@@ -138,10 +304,15 @@ class IVASSMSClient:
             self.scraper.cookies.set(name, value, domain="www.ivasms.com")
         
         try:
-            response = self.scraper.get(f"{self.base_url}/portal/sms/received", timeout=10)
+            response = self.scraper.get(f"{self.base_url}/portal/sms/received", timeout=IVAS_REQUEST_TIMEOUT)
             logger.debug(f"Response headers: {response.headers}")
             if response.status_code == 200:
                 html_content = self.decompress_response(response)
+                if self._is_login_page(response, html_content):
+                    self.set_auth_failure(
+                        "IVAS cookies are expired or no longer authenticated. Refresh the IVAS session cookies."
+                    )
+                    return False
                 soup = BeautifulSoup(html_content, 'html.parser')
                 csrf_input = soup.find('input', {'name': '_token'})
                 if csrf_input:
@@ -198,45 +369,20 @@ class IVASSMSClient:
                 f"{self.base_url}/portal/sms/received/getsms",
                 data=payload,
                 headers=headers,
-                timeout=10
+                timeout=IVAS_REQUEST_TIMEOUT
             )
             
             if response.status_code == 200:
                 logger.debug("Successfully retrieved SMS data")
                 html_content = self.decompress_response(response)
-                soup = BeautifulSoup(html_content, 'html.parser')
-                
-                count_sms = soup.select_one("#CountSMS").text if soup.select_one("#CountSMS") else '0'
-                paid_sms = soup.select_one("#PaidSMS").text if soup.select_one("#PaidSMS") else '0'
-                unpaid_sms = soup.select_one("#UnpaidSMS").text if soup.select_one("#UnpaidSMS") else '0'
-                revenue_sms = soup.select_one("#RevenueSMS").text.replace(' USD', '') if soup.select_one("#RevenueSMS") else '0'
-                
-                sms_details = []
-                items = soup.select("div.item")
-                for item in items:
-                    country_number = item.select_one(".col-sm-4").text.strip()
-                    count = item.select_one(".col-3:nth-child(2) p").text.strip()
-                    paid = item.select_one(".col-3:nth-child(3) p").text.strip()
-                    unpaid = item.select_one(".col-3:nth-child(4) p").text.strip()
-                    revenue = item.select_one(".col-3:nth-child(5) p span.currency_cdr").text.strip()
-                    
-                    sms_details.append({
-                        'country_number': country_number,
-                        'count': count,
-                        'paid': paid,
-                        'unpaid': unpaid,
-                        'revenue': revenue
-                    })
-                
-                result = {
-                    'count_sms': count_sms,
-                    'paid_sms': paid_sms,
-                    'unpaid_sms': unpaid_sms,
-                    'revenue': revenue_sms,
-                    'sms_details': sms_details
-                }
+                if self._is_login_page(response, html_content):
+                    self.set_auth_failure(
+                        "IVAS redirected the SMS summary request to login. Refresh the IVAS session cookies."
+                    )
+                    return None
+                result = self._parse_summary_html(html_content)
                 result['raw_response'] = html_content
-                logger.debug(f"Retrieved {len(sms_details)} SMS detail records: {sms_details}")
+                logger.debug(f"Retrieved {len(result['sms_details'])} SMS detail records: {result['sms_details']}")
                 return result
             logger.error(f"Failed to check OTPs. Status code: {response.status_code}, Response: {self.decompress_response(response)[:2000]}")
             return None
@@ -270,31 +416,17 @@ class IVASSMSClient:
                 f"{self.base_url}/portal/sms/received/getsms/number",
                 data=payload,
                 headers=headers,
-                timeout=10
+                timeout=IVAS_REQUEST_TIMEOUT
             )
             
             if response.status_code == 200:
                 html_content = self.decompress_response(response)
-                soup = BeautifulSoup(html_content, 'html.parser')
-                number_details = []
-                items = soup.select("div.card.card-body")
-                for item in items:
-                    phone_number = item.select_one(".col-sm-4").text.strip()
-                    count = item.select_one(".col-3:nth-child(2) p").text.strip()
-                    paid = item.select_one(".col-3:nth-child(3) p").text.strip()
-                    unpaid = item.select_one(".col-3:nth-child(4) p").text.strip()
-                    revenue = item.select_one(".col-3:nth-child(5) p span.currency_cdr").text.strip()
-                    onclick = item.select_one(".col-sm-4").get('onclick', '')
-                    id_number = onclick.split("'")[3] if onclick else ''
-                    
-                    number_details.append({
-                        'phone_number': phone_number,
-                        'count': count,
-                        'paid': paid,
-                        'unpaid': unpaid,
-                        'revenue': revenue,
-                        'id_number': id_number
-                    })
+                if self._is_login_page(response, html_content):
+                    self.set_auth_failure(
+                        f"IVAS redirected the number detail request for {phone_range} to login."
+                    )
+                    return None
+                number_details = self._parse_number_details_html(html_content)
                 logger.debug(f"Retrieved {len(number_details)} number details for range {phone_range}: {number_details}")
                 return number_details
             logger.error(f"Failed to get SMS details for {phone_range}. Status code: {response.status_code}, Response: {self.decompress_response(response)[:2000]}")
@@ -330,13 +462,17 @@ class IVASSMSClient:
                 f"{self.base_url}/portal/sms/received/getsms/number/sms",
                 data=payload,
                 headers=headers,
-                timeout=10
+                timeout=IVAS_REQUEST_TIMEOUT
             )
             
             if response.status_code == 200:
                 html_content = self.decompress_response(response)
-                soup = BeautifulSoup(html_content, 'html.parser')
-                message = soup.select_one(".col-9.col-sm-6 p").text.strip() if soup.select_one(".col-9.col-sm-6 p") else None
+                if self._is_login_page(response, html_content):
+                    self.set_auth_failure(
+                        f"IVAS redirected the OTP message request for {phone_number} to login."
+                    )
+                    return None
+                message = self._parse_otp_message_html(html_content)
                 logger.debug(f"Retrieved OTP message for {phone_number}: {message}")
                 return message
             logger.error(f"Failed to get OTP message for {phone_number}. Status code: {response.status_code}, Response: {self.decompress_response(response)[:2000]}")
